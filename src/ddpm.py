@@ -20,3 +20,6 @@ class DDPMSampler:
         step_ratio = self.num_train_timesteps // self.num_inference_steps
         timesteps = (np.arange(0, num_inference_steps) * step_ratio).round()[::-1].copy().astype(np.int64)
         self.timesteps = torch.from_numpy(timesteps)
+    def _get_previous_timestep(self, timestep: int) -> int:
+        prev_t = timestep - self.num_train_timesteps // self.num_inference_steps
+        return prev_t
