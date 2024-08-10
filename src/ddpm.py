@@ -39,3 +39,53 @@ class DDPMSampler:
         variance = torch.clamp(variance, min=1e-20)
 
         return variance
+
+    def set_strength(self, strength=1):
+        """
+            Set how much noise to add to the input image.
+            More noise (strength ~ 1) means that the output will be further from the input image.
+            Less noise (strength ~ 0) means that the output will be closer to the input image.
+        """
+        # start_step is the number of noise levels to skip
+        start_step = self.num_inference_steps - int(self.num_inference_steps * strength)
+        self.timesteps = self.timesteps[start_step:]
+        self.start_step = start_step
+
+    def step(self, timestep: int, latents: torch.Tensor, model_output: torch.Tensor):
+        t = timestep
+        prev_t = self._get_previous_timestep(t)
+
+        # 1. compute alphas, betas
+        alpha_prod_t = self.alphas_cumprod[t]
+        alpha_prod_t_prev = self.alphas_cumprod[prev_t] if prev_t >= 0 else self.one
+        beta_prod_t = 1 - alpha_prod_t
+        beta_prod_t_prev = 1 - alpha_prod_t_prev
+        current_alpha_t = alpha_prod_t / alpha_prod_t_prev
+        current_beta_t = 1 - current_alpha_t
+
+        # 2. compute predicted original sample from predicted noise also called
+        # "predicted x_0" of formula (15) from https://arxiv.org/pdf/2006.11239.pdf
+        pred_original_sample = (latents - beta_prod_t ** (0.5) * model_output) / alpha_prod_t ** (0.5)
+
+        # 4. Compute coefficients for pred_original_sample x_0 and current sample x_t
+        # See formula (7) from https://arxiv.org/pdf/2006.11239.pdf
+        pred_original_sample_coeff = (alpha_prod_t_prev ** (0.5) * current_beta_t) / beta_prod_t
+        current_sample_coeff = current_alpha_t ** (0.5) * beta_prod_t_prev / beta_prod_t
+
+        # 5. Compute predicted previous sample µ_t
+        # See formula (7) from https://arxiv.org/pdf/2006.11239.pdf
+        pred_prev_sample = pred_original_sample_coeff * pred_original_sample + current_sample_coeff * latents
+
+        # 6. Add noise
+        variance = 0
+        if t > 0:
+            device = model_output.device
+            noise = torch.randn(model_output.shape, generator=self.generator, device=device, dtype=model_output.dtype)
+            # Compute the variance as per formula (7) from https://arxiv.org/pdf/2006.11239.pdf
+            variance = (self._get_variance(t) ** 0.5) * noise
+
+        # sample from N(mu, sigma) = X can be obtained by X = mu + sigma * N(0, 1)
+        # the variable "variance" is already multiplied by the noise N(0, 1)
+        pred_prev_sample = pred_prev_sample + variance
+
+        return pred_prev_sample
